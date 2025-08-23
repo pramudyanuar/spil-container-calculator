@@ -722,11 +722,12 @@ if st.button("🚀 Mulai Proses Pengepakan", type="primary", use_container_width
                     for (name, dx, dy, dz), count in unplaced_summary.items():
                         st.write(f"📦 {count}x {name} ({dx}×{dy}×{dz} cm)")
 
-        # Export results option
-        # col1, col2 = st.columns(2)
+        # Export results option dengan design yang menarik
+        st.subheader("📤 Export Hasil")
+        col1, col2 = st.columns(2)
         
         with col1:
-            if st.button("📊 Export Hasil ke CSV"):
+            if st.button("📊 Export Hasil ke CSV", use_container_width=True, type="secondary"):
                 # Create detailed results
                 results_data = []
                 for container_idx, container in enumerate(env.containers):
@@ -752,16 +753,17 @@ if st.button("🚀 Mulai Proses Pengepakan", type="primary", use_container_width
                         label="💾 Download CSV",
                         data=csv,
                         file_name="container_packing_results.csv",
-                        mime="text/csv"
+                        mime="text/csv",
+                        use_container_width=True
                     )
         
         with col2:
-            if st.button("📄 Export 3D Multi-View PDF"):
-                with st.spinner("Membuat PDF multi-view... Mohon tunggu..."):
+            if st.button("📄 Export 3D Multi-View PDF", use_container_width=True, type="secondary"):
+                with st.spinner("🔄 Membuat PDF multi-view... Mohon tunggu..."):
                     try:
                         pdf_buffer = create_multiview_pdf(env)
                         pdf_bytes = pdf_buffer.getvalue()
-                        st.write(f"Ukuran PDF: {len(pdf_bytes)} bytes")
+                        
                         if not pdf_bytes or len(pdf_bytes) < 1000:
                             st.error("❌ PDF gagal dibuat atau file terlalu kecil. Cek dependencies dan data.")
                         else:
@@ -769,12 +771,13 @@ if st.button("🚀 Mulai Proses Pengepakan", type="primary", use_container_width
                                 label="📥 Download PDF Report",
                                 data=pdf_bytes,
                                 file_name="3d_container_packing_multiview.pdf",
-                                mime="application/pdf"
+                                mime="application/pdf",
+                                use_container_width=True
                             )
                             st.success("✅ PDF multi-view berhasil dibuat!")
                     except Exception as e:
                         st.error(f"❌ Error membuat PDF: {str(e)}")
-                        st.info("Pastikan package kaleido dan reportlab sudah terinstall: pip install kaleido reportlab")
+                        st.info("💡 Pastikan package kaleido dan reportlab sudah terinstall")
 else:
     st.info("👆 Atur konfigurasi di sidebar dan klik 'Mulai Proses Pengepakan' untuk melihat hasilnya.")
     
