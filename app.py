@@ -427,15 +427,24 @@ def create_multiview_pdf(env, base_fig):
     story.append(Paragraph("📦 Laporan Multi-View Pengepakan Kontainer", styles['h1']))
     story.append(Spacer(1, 20))
     
-    # Tabel ringkasan
+    # Tabel Ringkasan
     summary_data = [['Metrik', 'Nilai']]
+
     summary_data.append(['Kontainer Digunakan', str(len(env.containers))])
     summary_data.append(['Barang Ditempatkan', str(len(env.placed_items))])
     summary_data.append(['Barang Tidak Muat', str(len(env.unplaced))])
+
+    # Hitung Efisiensi Volume
     total_vol = len(env.containers) * env.width * env.depth * env.height
     used_vol = sum(c['volume_used'] for c in env.containers)
     eff = (used_vol / total_vol * 100) if total_vol > 0 else 0
     summary_data.append(['Efisiensi Volume', f'{eff:.1f}%'])
+    
+    # Hitung Total Berat
+    total_weight_placed = sum(item.weight for item in env.placed_items)
+    weight_display = f'{total_weight_placed:.1f}' if total_weight_placed % 1 != 0 else f'{int(total_weight_placed)}'
+    summary_data.append(['Total Berat (kg)', weight_display])
+    
     summary_table = Table(summary_data, colWidths=[2.5*inch, 2.5*inch])
     summary_table.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.darkblue), ('TEXTCOLOR',(0,0),(-1,0),colors.whitesmoke),
@@ -626,7 +635,7 @@ if st.button("🚀 Mulai Proses Pengepakan", type="primary", use_container_width
 
         st.success("🎉 Proses Pengepakan Selesai!")
         st.subheader("📊 Ringkasan Hasil")
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
         col1.metric("Kontainer Digunakan", f"{len(env.containers)}")
         col2.metric("Barang Ditempatkan", f"{len(env.placed_items)}")
         col3.metric("Barang Tidak Muat", f"{len(env.unplaced)}")
@@ -635,6 +644,10 @@ if st.button("🚀 Mulai Proses Pengepakan", type="primary", use_container_width
         used_volume = sum(c['volume_used'] for c in env.containers)
         efficiency = (used_volume / total_container_volume * 100) if total_container_volume > 0 else 0
         col4.metric("Efisiensi Volume", f"{efficiency:.1f}%")
+
+        total_weight_placed = sum(item.weight for item in env.placed_items)
+        weight_display = f'{total_weight_placed:.1f}' if total_weight_placed % 1 != 0 else f'{int(total_weight_placed)}'
+        col5.metric("Total Berat", f"{weight_display} kg")
         
         st.subheader("🌐 Visualisasi 3D Interaktif")
         if env.placed_items:

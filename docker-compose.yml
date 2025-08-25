@@ -1,0 +1,18 @@
+services:
+  streamlit-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
+      - /app/__pycache__
+      - /app/.git
+    environment:
+      - PYTHONPATH=/app
+      - STREAMLIT_SERVER_RUN_ON_SAVE=true
+      - STREAMLIT_SERVER_FILE_WATCHER_TYPE=poll
+    restart: unless-stopped
+    tty: true
+    stdin_open: true
