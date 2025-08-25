@@ -33,13 +33,17 @@ import base64
 
 class Item:
     """Mewakili satu barang yang akan dimasukkan ke dalam kontainer."""
-    def __init__(self, dx, dy, dz, weight, name=None):
+    def __init__(self, dx, dy, dz, weight, name=None, stackable=True, fragile=False, max_stack_weight=None):
         self.dx = float(dx)
         self.dy = float(dy)
         self.dz = float(dz)
         self.weight = float(weight)
         self.volume = self.dx * self.dy * self.dz
         self.name = name or f"Item_{self.dx}x{self.dy}x{self.dz}_{self.weight}kg"
+        self.stackable = stackable  # Apakah barang ini bisa ditumpuk
+        self.fragile = fragile      # Apakah barang ini mudah pecah/rusak
+        self.max_stack_weight = max_stack_weight or (weight * 10 if stackable else 0)  # Berat maksimal yang bisa ditahan
+        
         # Menghasilkan semua 6 kemungkinan orientasi rotasi
         self.orientations = list(set([
             (self.dx, self.dy, self.dz),
@@ -89,7 +93,8 @@ class ContainerPackingEnv:
         # Cek dimensi
         if item.dx > sw or item.dy > sd or item.dz > sh:
             return False
-        # Cek tabrakan dengan item lain (seharusnya tidak terjadi dengan logika ruang bebas, tapi sebagai pengaman)
+            
+        # Cek tabrakan dengan item lain
         for placed in container['placed']:
             pi = placed['item']
             px, py, pz = placed['x'], placed['y'], placed['z']
@@ -97,7 +102,69 @@ class ContainerPackingEnv:
                     sy + item.dy <= py or sy >= py + pi.dy or
                     sz + item.dz <= pz or sz >= pz + pi.dz):
                 return False
+        
+        # Cek kondisi fragile dan stackable
+        if not self._check_stacking_rules(container, item, (sx, sy, sz)):
+            return False
+            
         return True
+    
+    def _check_stacking_rules(self, container, item, pos):
+        """Memeriksa aturan stacking untuk barang fragile dan stackable."""
+        x, y, z = pos
+        
+        # Jika item fragile, tidak boleh ada yang di atasnya
+        if item.fragile:
+            for placed in container['placed']:
+                pi = placed['item']
+                px, py, pz = placed['x'], placed['y'], placed['z']
+                # Cek apakah ada item lain yang akan berada di atas item fragile ini
+                if (px < x + item.dx and px + pi.dx > x and 
+                    py < y + item.dy and py + pi.dy > y and 
+                    pz >= z + item.dz):
+                    return False
+        
+        # Cek beban di bawah item ini
+        items_below = []
+        for placed in container['placed']:
+            pi = placed['item']
+            px, py, pz = placed['x'], placed['y'], placed['z']
+            # Item di bawah jika memiliki overlap horizontal dan berada di bawah
+            if (px < x + item.dx and px + pi.dx > x and 
+                py < y + item.dy and py + pi.dy > y and 
+                pz + pi.dz <= z):
+                items_below.append(placed)
+        
+        # Cek kapasitas beban untuk item di bawah
+        for placed_below in items_below:
+            pi = placed_below['item']
+            if not pi.stackable:
+                return False  # Item di bawah tidak bisa ditumpuk
+            
+            # Hitung total berat yang akan ditahan item di bawah
+            current_weight_above = self._calculate_weight_above(container, placed_below)
+            if current_weight_above + item.weight > pi.max_stack_weight:
+                return False  # Melebihi kapasitas beban
+        
+        return True
+    
+    def _calculate_weight_above(self, container, base_item):
+        """Menghitung total berat yang ditahan oleh suatu item."""
+        total_weight = 0
+        bx, by, bz = base_item['x'], base_item['y'], base_item['z']
+        base = base_item['item']
+        
+        for placed in container['placed']:
+            pi = placed['item']
+            px, py, pz = placed['x'], placed['y'], placed['z']
+            
+            # Item di atas jika memiliki overlap horizontal dan berada di atas
+            if (px < bx + base.dx and px + pi.dx > bx and 
+                py < by + base.dy and py + pi.dy > by and 
+                pz >= bz + base.dz):
+                total_weight += pi.weight
+        
+        return total_weight
 
     def _update_free_spaces(self, container, space, pos, item):
         """Memperbarui daftar ruang kosong setelah item ditempatkan."""
@@ -133,13 +200,22 @@ class ContainerPackingEnv:
                 continue
 
             for orientation in item_to_place.orientations:
-                temp_item = Item(*orientation, item_to_place.weight, item_to_place.name)
+                temp_item = Item(*orientation, item_to_place.weight, item_to_place.name, 
+                               item_to_place.stackable, item_to_place.fragile, item_to_place.max_stack_weight)
                 
                 # Heuristik: prioritaskan ruang yang paling bawah, paling kiri, paling depan
-                for space in sorted(container['free'], key=lambda s: (s[2], s[1], s[0])):
+                # Untuk item fragile, prioritaskan tempat yang lebih tinggi
+                if item_to_place.fragile:
+                    sorted_spaces = sorted(container['free'], key=lambda s: (-s[2], s[1], s[0]))
+                else:
+                    sorted_spaces = sorted(container['free'], key=lambda s: (s[2], s[1], s[0]))
+                    
+                for space in sorted_spaces:
                     if self._can_place(container, temp_item, space):
                         # Skor berdasarkan sisa ruang (Best-Fit) dan ketinggian
-                        score = (space[3] - temp_item.dx) + (space[4] - temp_item.dy) + space[2] * 1.5
+                        # Untuk item fragile, berikan bonus untuk posisi tinggi
+                        height_bonus = space[2] * 0.5 if item_to_place.fragile else space[2] * 1.5
+                        score = (space[3] - temp_item.dx) + (space[4] - temp_item.dy) + height_bonus
                         if score < best_score:
                             best_score = score
                             best_fit = (container, temp_item, space)
@@ -267,17 +343,18 @@ def create_plotly_visualization(env):
                 z=vertices_z,
                 i=i, j=j, k=k,
                 color=color_map.get(item.name, 'blue'),
-                opacity=0.7,
+                opacity=0.7 if not item.fragile else 0.9,  # Item fragile lebih opaque
                 name=item.name,
                 showlegend=False,
                 hovertemplate=f"<b>{item.name}</b><br>" +
                              f"Dimensi: {item.dx:.1f} x {item.dy:.1f} x {item.dz:.1f} cm<br>" +
                              f"Berat: {item.weight:.1f} kg<br>" +
                              f"Volume: {item.volume:.1f} cm³<br>" +
-                             f"Posisi: ({x:.1f}, {y:.1f}, {z:.1f})<extra></extra>"
-            ))
-            
-            # Add box wireframe for better visibility
+                             f"Posisi: ({x:.1f}, {y:.1f}, {z:.1f})<br>" +
+                             f"Stackable: {'Ya' if item.stackable else 'Tidak'}<br>" +
+                             f"Fragile: {'Ya' if item.fragile else 'Tidak'}<br>" +
+                             f"Max Stack Weight: {item.max_stack_weight:.1f} kg<extra></extra>"
+            ))            # Add box wireframe for better visibility
             box_x = [
                 x + offset_x, x + item.dx + offset_x, x + item.dx + offset_x, x + offset_x, x + offset_x, None,
                 x + offset_x, x + item.dx + offset_x, x + item.dx + offset_x, x + offset_x, x + offset_x, None,
@@ -574,34 +651,55 @@ with st.sidebar:
         item_weight = col2.number_input("Berat (kg)", min_value=0.1, value=10.0, format="%.1f")
         item_quantity = st.number_input("Jumlah", min_value=1, value=10, step=1)
         
+        # Opsi tambahan untuk stacking dan fragile
+        st.markdown("**Karakteristik Barang:**")
+        col3, col4 = st.columns(2)
+        item_stackable = col3.checkbox("Bisa Ditumpuk", value=True, help="Apakah barang ini bisa dijadikan dasar tumpukan?")
+        item_fragile = col4.checkbox("Mudah Pecah/Rusak", value=False, help="Apakah barang ini tidak boleh ditindih?")
+        
+        # Berat maksimal yang bisa ditahan (hanya aktif jika stackable)
+        if item_stackable:
+            item_max_stack = st.number_input(
+                "Beban Maksimal yang Bisa Ditahan (kg)", 
+                min_value=0.0, value=item_weight * 10, format="%.1f",
+                help="Berat maksimal yang bisa ditumpuk di atas barang ini"
+            )
+        else:
+            item_max_stack = 0.0
+        
         if st.form_submit_button("➕ Tambah Barang"):
             st.session_state.items_to_pack.append({
                 "name": item_name, "dx": item_dx, "dy": item_dy, "dz": item_dz,
-                "weight": item_weight, "quantity": item_quantity
+                "weight": item_weight, "quantity": item_quantity,
+                "stackable": item_stackable, "fragile": item_fragile, "max_stack_weight": item_max_stack
             })
-            st.success(f"{item_quantity}x {item_name} ditambahkan!")
+            fragile_text = " (Fragile)" if item_fragile else ""
+            stackable_text = " (Non-stackable)" if not item_stackable else ""
+            st.success(f"{item_quantity}x {item_name}{fragile_text}{stackable_text} ditambahkan!")
 
     # Quick add sample items
     st.markdown("**Contoh Cepat:**")
     col1, col2 = st.columns(2)
     if col1.button("📦 Sample Boxes", help="Tambah beberapa kardus ukuran berbeda"):
         sample_items = [
-            {"name": "Kardus Kecil", "dx": 30, "dy": 40, "dz": 20, "weight": 5, "quantity": 15},
-            {"name": "Kardus Sedang", "dx": 50, "dy": 60, "dz": 40, "weight": 12, "quantity": 8},
-            {"name": "Kardus Besar", "dx": 80, "dy": 100, "dz": 60, "weight": 25, "quantity": 3}
+            {"name": "Kardus Kecil", "dx": 30, "dy": 40, "dz": 20, "weight": 5, "quantity": 15, "stackable": True, "fragile": False, "max_stack_weight": 50},
+            {"name": "Kardus Sedang", "dx": 50, "dy": 60, "dz": 40, "weight": 12, "quantity": 8, "stackable": True, "fragile": False, "max_stack_weight": 120},
+            {"name": "Kardus Besar", "dx": 80, "dy": 100, "dz": 60, "weight": 25, "quantity": 3, "stackable": True, "fragile": False, "max_stack_weight": 100}
         ]
         st.session_state.items_to_pack.extend(sample_items)
         st.success("Sample boxes ditambahkan!")
         st.rerun()
     
-    if col2.button("🎁 Sample Products", help="Tambah berbagai produk"):
+    if col2.button("🎁 Sample Products", help="Tambah berbagai produk dengan karakteristik khusus"):
         sample_items = [
-            {"name": "TV 32inch", "dx": 75, "dy": 15, "dz": 45, "weight": 8, "quantity": 2},
-            {"name": "Laptop Box", "dx": 40, "dy": 30, "dz": 8, "weight": 3, "quantity": 5},
-            {"name": "Furniture Box", "dx": 120, "dy": 80, "dz": 40, "weight": 30, "quantity": 2}
+            {"name": "TV 32inch", "dx": 75, "dy": 15, "dz": 45, "weight": 8, "quantity": 2, "stackable": False, "fragile": True, "max_stack_weight": 0},
+            {"name": "Laptop Box", "dx": 40, "dy": 30, "dz": 8, "weight": 3, "quantity": 5, "stackable": True, "fragile": True, "max_stack_weight": 10},
+            {"name": "Furniture Box", "dx": 120, "dy": 80, "dz": 40, "weight": 30, "quantity": 2, "stackable": False, "fragile": False, "max_stack_weight": 0},
+            {"name": "Glass Items", "dx": 60, "dy": 40, "dz": 25, "weight": 15, "quantity": 4, "stackable": False, "fragile": True, "max_stack_weight": 0},
+            {"name": "Heavy Equipment", "dx": 100, "dy": 80, "dz": 50, "weight": 50, "quantity": 2, "stackable": True, "fragile": False, "max_stack_weight": 200}
         ]
         st.session_state.items_to_pack.extend(sample_items)
-        st.success("Sample products ditambahkan!")
+        st.success("Sample products dengan karakteristik khusus ditambahkan!")
         st.rerun()
 
     # Tampilkan dan kelola daftar item
@@ -616,7 +714,19 @@ with st.sidebar:
         
         for i, item in enumerate(st.session_state.items_to_pack):
             col1, col2 = st.columns([4, 1])
-            col1.write(f"• {item['quantity']}x **{item['name']}** ({item['dx']}×{item['dy']}×{item['dz']} cm, {item['weight']} kg)")
+            
+            # Buat label dengan karakteristik barang
+            characteristics = []
+            if item.get('fragile', False):
+                characteristics.append("🔺 Fragile")
+            if not item.get('stackable', True):
+                characteristics.append("⚠️ Non-stackable")
+            if item.get('stackable', True) and item.get('max_stack_weight', 0) > 0:
+                characteristics.append(f"📚 Max: {item.get('max_stack_weight', 0)}kg")
+            
+            char_text = f" [{', '.join(characteristics)}]" if characteristics else ""
+            
+            col1.write(f"• {item['quantity']}x **{item['name']}** ({item['dx']}×{item['dy']}×{item['dz']} cm, {item['weight']} kg){char_text}")
             if col2.button("❌", key=f"del_{i}", help="Hapus item ini"):
                 st.session_state.items_to_pack.pop(i)
                 st.rerun()
@@ -635,7 +745,9 @@ if st.button("🚀 Mulai Proses Pengepakan", type="primary", use_container_width
         with st.spinner("Menghitung tata letak optimal... Ini mungkin butuh beberapa saat."):
             # 1. Siapkan daftar item dari input pengguna
             all_items = [
-                Item(dx=ic['dx'], dy=ic['dy'], dz=ic['dz'], weight=ic['weight'], name=ic['name'])
+                Item(dx=ic['dx'], dy=ic['dy'], dz=ic['dz'], weight=ic['weight'], 
+                     name=ic['name'], stackable=ic.get('stackable', True), 
+                     fragile=ic.get('fragile', False), max_stack_weight=ic.get('max_stack_weight', ic['weight']*10))
                 for ic in st.session_state.items_to_pack for _ in range(ic['quantity'])
             ]
 
@@ -695,13 +807,20 @@ if st.button("🚀 Mulai Proses Pengepakan", type="primary", use_container_width
             with st.expander("🏷️ Legend - Jenis Barang"):
                 unique_items = {}
                 for item in env.placed_items:
-                    key = (item.name, item.dx, item.dy, item.dz)
+                    key = (item.name, item.dx, item.dy, item.dz, item.stackable, item.fragile)
                     if key not in unique_items:
                         unique_items[key] = 0
                     unique_items[key] += 1
                 
-                for (name, dx, dy, dz), count in unique_items.items():
-                    st.write(f"📦 **{name}**: {count} item(s) - {dx}×{dy}×{dz} cm")
+                for (name, dx, dy, dz, stackable, fragile), count in unique_items.items():
+                    characteristics = []
+                    if fragile:
+                        characteristics.append("🔺 Fragile")
+                    if not stackable:
+                        characteristics.append("⚠️ Non-stackable")
+                    
+                    char_text = f" [{', '.join(characteristics)}]" if characteristics else ""
+                    st.write(f"📦 **{name}**: {count} item(s) - {dx}×{dy}×{dz} cm{char_text}")
         else:
             st.info("Tidak ada barang yang berhasil ditempatkan untuk divisualisasikan.")
 
@@ -717,10 +836,17 @@ if st.button("🚀 Mulai Proses Pengepakan", type="primary", use_container_width
                     st.warning("**Barang tidak muat karena kontainer penuh:**")
                     unplaced_summary = {}
                     for item in env.unplaced:
-                        key = (item.name, item.dx, item.dy, item.dz)
+                        key = (item.name, item.dx, item.dy, item.dz, item.stackable, item.fragile)
                         unplaced_summary[key] = unplaced_summary.get(key, 0) + 1
-                    for (name, dx, dy, dz), count in unplaced_summary.items():
-                        st.write(f"📦 {count}x {name} ({dx}×{dy}×{dz} cm)")
+                    for (name, dx, dy, dz, stackable, fragile), count in unplaced_summary.items():
+                        characteristics = []
+                        if fragile:
+                            characteristics.append("🔺 Fragile")
+                        if not stackable:
+                            characteristics.append("⚠️ Non-stackable")
+                        
+                        char_text = f" [{', '.join(characteristics)}]" if characteristics else ""
+                        st.write(f"📦 {count}x {name} ({dx}×{dy}×{dz} cm){char_text}")
 
         # Export results option dengan design yang menarik
         st.subheader("📤 Export Hasil")
@@ -743,7 +869,10 @@ if st.button("🚀 Mulai Proses Pengepakan", type="primary", use_container_width
                             'Volume_cm3': item.volume,
                             'Posisi_X': placement['x'],
                             'Posisi_Y': placement['y'],
-                            'Posisi_Z': placement['z']
+                            'Posisi_Z': placement['z'],
+                            'Stackable': 'Ya' if item.stackable else 'Tidak',
+                            'Fragile': 'Ya' if item.fragile else 'Tidak',
+                            'Max_Stack_Weight_kg': item.max_stack_weight
                         })
                 
                 if results_data:
@@ -789,14 +918,23 @@ else:
         - **Visualisasi 3D**: Interaktif dengan Plotly (dapat digeser, diperbesar, diputar)
         - **Multi-Kontainer**: Otomatis menggunakan kontainer tambahan jika diperlukan
         - **Optimasi Berat**: Mempertimbangkan batas berat maksimum kontainer
-        - **Export Data**: Hasil dapat diekspor ke format CSV
-        - **📄 Export PDF Multi-View**: Generate laporan PDF dengan 4 sudut pandang berbeda (Front, Side, Top, Isometric)
+        - **🆕 Stacking Rules**: Mendukung aturan penumpukan dengan batas beban maksimal
+        - **🆕 Fragile Items**: Barang fragile tidak boleh ditindih dan ditempatkan di posisi aman
+        - **🆕 Non-Stackable Items**: Barang yang tidak bisa dijadikan dasar tumpukan
+        - **Export Data**: Hasil dapat diekspor ke format CSV dengan detail karakteristik barang
+        - **📄 Export PDF Multi-View**: Generate laporan PDF dengan 4 sudut pandang berbeda
         
         ### Cara Penggunaan:
         1. Pilih ukuran kontainer atau gunakan custom
-        2. Tambahkan barang dengan dimensi dan berat
-        3. Gunakan tombol "Sample" untuk mencoba contoh
-        4. Klik "Mulai Proses Pengepakan" untuk melihat hasil
-        5. Interaksi dengan visualisasi 3D untuk melihat detail
-        6. Export hasil ke CSV atau PDF multi-view report
+        2. Tambahkan barang dengan dimensi, berat, dan karakteristik (stackable/fragile)
+        3. Tentukan batas beban maksimal untuk barang yang bisa ditumpuk
+        4. Gunakan tombol "Sample" untuk mencoba contoh dengan berbagai karakteristik
+        5. Klik "Mulai Proses Pengepakan" untuk melihat hasil
+        6. Lihat visualisasi 3D dengan informasi detail karakteristik setiap barang
+        7. Export hasil ke CSV atau PDF multi-view report
+        
+        ### Karakteristik Barang:
+        - **🔺 Fragile**: Barang mudah pecah/rusak, tidak boleh ditindih
+        - **⚠️ Non-stackable**: Barang tidak bisa dijadikan dasar tumpukan
+        - **📚 Max Stack Weight**: Berat maksimal yang bisa ditahan oleh barang stackable
         """)
