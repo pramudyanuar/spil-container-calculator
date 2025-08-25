@@ -18,6 +18,7 @@ import random
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
+import plotly.io as pio
 from plotly.subplots import make_subplots
 import io
 from reportlab.lib.pagesizes import A4, landscape
@@ -399,203 +400,74 @@ def create_plotly_visualization(env):
         height=700,
         showlegend=True
     )
-    
+
     return fig
 
-def create_multiview_pdf(env):
-    """Membuat PDF dengan multiple views dari visualisasi 3D."""
-    
-    # Create different camera angles for multiple views
+def create_multiview_pdf(env, base_fig):
+    """
+    Membuat PDF dengan multiple views dari objek figur Plotly yang sudah ada.
+    """
+    fig = go.Figure(base_fig)
+
+    # 6 POV kamera
     camera_views = {
-        "Front View": dict(eye=dict(x=0, y=-2, z=0.5)),
-        "Side View": dict(eye=dict(x=2, y=0, z=0.5)),
-        "Top View": dict(eye=dict(x=0, y=0, z=2)),
-        "Isometric": dict(eye=dict(x=1.5, y=1.5, z=1.5))
+        "Tampak Isometrik": dict(eye=dict(x=1.5, y=1.5, z=1.5), up=dict(x=0, y=0, z=1)),
+        "Tampak Atas":      dict(eye=dict(x=0, y=0, z=2.5), up=dict(x=0, y=1, z=0)),
+        "Tampak Depan":     dict(eye=dict(x=0, y=-2.5, z=0), up=dict(x=0, y=0, z=1)),
+        "Tampak Belakang":  dict(eye=dict(x=0, y=2.5, z=0), up=dict(x=0, y=0, z=1)),
+        "Tampak Kanan":     dict(eye=dict(x=2.5, y=0, z=0), up=dict(x=0, y=0, z=1)),
+        "Tampak Kiri":      dict(eye=dict(x=-2.5, y=0, z=0), up=dict(x=0, y=0, z=1)),
     }
     
-    # Generate colors for different item types
-    unique_names = list(set(item.name for item in env.placed_items))
-    colors = px.colors.qualitative.Set3[:len(unique_names)]
-    if len(unique_names) > len(colors):
-        colors = colors * (len(unique_names) // len(colors) + 1)
-    color_map = {name: colors[i] for i, name in enumerate(unique_names)}
-    
-    # Create PDF buffer
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), 
-                          rightMargin=30, leftMargin=30, topMargin=50, bottomMargin=30)
-    
-    # Styles
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), topMargin=30, bottomMargin=30)
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontSize=16,
-        spaceAfter=30,
-        alignment=1  # Center
-    )
-    
     story = []
     
-    # Title
-    story.append(Paragraph("📦 Container Packing 3D Multi-View Report", title_style))
+    story.append(Paragraph("📦 Laporan Multi-View Pengepakan Kontainer", styles['h1']))
     story.append(Spacer(1, 20))
     
-    # Summary statistics
-    summary_data = [
-        ['Metric', 'Value'],
-        ['Containers Used', str(len(env.containers))],
-        ['Items Placed', str(len(env.placed_items))],
-        ['Items Unplaced', str(len(env.unplaced))],
-    ]
-    
-    # Calculate efficiency
-    total_container_volume = len(env.containers) * env.width * env.depth * env.height
-    used_volume = sum(c['volume_used'] for c in env.containers)
-    efficiency = (used_volume / total_container_volume * 100) if total_container_volume > 0 else 0
-    summary_data.append(['Volume Efficiency', f'{efficiency:.1f}%'])
-    
-    summary_table = Table(summary_data, colWidths=[2*inch, 2*inch])
+    # Tabel ringkasan
+    summary_data = [['Metrik', 'Nilai']]
+    summary_data.append(['Kontainer Digunakan', str(len(env.containers))])
+    summary_data.append(['Barang Ditempatkan', str(len(env.placed_items))])
+    summary_data.append(['Barang Tidak Muat', str(len(env.unplaced))])
+    total_vol = len(env.containers) * env.width * env.depth * env.height
+    used_vol = sum(c['volume_used'] for c in env.containers)
+    eff = (used_vol / total_vol * 100) if total_vol > 0 else 0
+    summary_data.append(['Efisiensi Volume', f'{eff:.1f}%'])
+    summary_table = Table(summary_data, colWidths=[2.5*inch, 2.5*inch])
     summary_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 12),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ('BACKGROUND', (0,0), (-1,0), colors.darkblue), ('TEXTCOLOR',(0,0),(-1,0),colors.whitesmoke),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'), ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0,0), (-1,0), 12), ('BACKGROUND', (0,1), (-1,-1), colors.beige),
+        ('GRID', (0,0), (-1,-1), 1, colors.black)
     ]))
-    
     story.append(summary_table)
     story.append(Spacer(1, 30))
-    
-    # Create and save multiple view images
-    image_objects = []
-    
-    for view_name, camera in camera_views.items():
-        # Create figure for this view
-        fig = go.Figure()
-        
-        offset_x = 0
-        
-        for container_idx, container in enumerate(env.containers):
-            # Draw container outline
-            W, L, H = env.width, env.depth, env.height
-            
-            # Container wireframe
-            fig.add_trace(go.Scatter3d(
-                x=[offset_x, offset_x + W, offset_x + W, offset_x, offset_x, 
-                   offset_x, offset_x + W, offset_x + W, offset_x, offset_x,
-                   offset_x, offset_x, None, offset_x + W, offset_x + W, None,
-                   offset_x + W, offset_x + W, None, offset_x, offset_x],
-                y=[0, 0, L, L, 0, 
-                   0, 0, L, L, 0,
-                   0, 0, None, 0, 0, None,
-                   L, L, None, L, L],
-                z=[0, 0, 0, 0, 0,
-                   H, H, H, H, H,
-                   0, H, None, 0, H, None,
-                   0, H, None, 0, H],
-                mode='lines',
-                line=dict(color='black', width=2),
-                name=f'Container {container_idx + 1}',
-                showlegend=False
-            ))
 
-            # Draw placed items
-            for placement in container['placed']:
-                item = placement['item']
-                x, y, z = placement['x'], placement['y'], placement['z']
-                
-                # Create all 8 vertices of the box
-                vertices_x = [
-                    x + offset_x, x + item.dx + offset_x, x + item.dx + offset_x, x + offset_x,
-                    x + offset_x, x + item.dx + offset_x, x + item.dx + offset_x, x + offset_x
-                ]
-                vertices_y = [
-                    y, y, y + item.dy, y + item.dy,
-                    y, y, y + item.dy, y + item.dy
-                ]
-                vertices_z = [
-                    z, z, z, z,
-                    z + item.dz, z + item.dz, z + item.dz, z + item.dz
-                ]
-                
-                # Define triangular faces
-                i = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 0, 0, 1, 1, 2, 2, 3, 3]
-                j = [1, 3, 2, 0, 3, 1, 0, 2, 5, 7, 6, 4, 7, 5, 4, 6, 4, 1, 5, 2, 6, 3, 7, 0]
-                k = [3, 1, 0, 2, 1, 3, 2, 0, 7, 5, 4, 6, 5, 7, 6, 4, 1, 4, 2, 5, 3, 6, 0, 7]
-                
-                fig.add_trace(go.Mesh3d(
-                    x=vertices_x, y=vertices_y, z=vertices_z,
-                    i=i, j=j, k=k,
-                    color=color_map.get(item.name, 'blue'),
-                    opacity=0.8,
-                    showlegend=False
-                ))
-            
-            offset_x += env.width * 1.2
+    # Loop melalui setiap sudut pandang, update kamera, dan render gambar
+    images_in_row = []
+    for view_name, camera_setting in camera_views.items():
+        fig.update_layout(scene_camera=camera_setting, title=view_name)
         
-        # Update layout for this view
-        fig.update_layout(
-            scene=dict(
-                xaxis_title="Width (cm)",
-                yaxis_title="Length (cm)", 
-                zaxis_title="Height (cm)",
-                aspectmode='data',
-                camera=camera
-            ),
-            title=f"{view_name}",
-            width=800, height=600,
-            showlegend=False,
-            margin=dict(l=0, r=0, t=40, b=0)
-        )
+        # Konversi figur menjadi gambar PNG
+        img_bytes = pio.to_image(fig, format="png", width=600, height=450, scale=2)
+        img = Image(io.BytesIO(img_bytes), width=4.5*inch, height=3.375*inch)
+        images_in_row.append(img)
         
-        # Convert to image
-        img_bytes = fig.to_image(format="png", width=800, height=600)
-        img_buffer = io.BytesIO(img_bytes)
-        
-        # Create reportlab image
-        img = Image(img_buffer, width=6*inch, height=4.5*inch)
-        story.append(Paragraph(f"<b>{view_name}</b>", styles['Heading2']))
-        story.append(Spacer(1, 10))
-        story.append(img)
-        story.append(Spacer(1, 20))
+        if len(images_in_row) == 2:
+            table = Table([images_in_row], colWidths=[5*inch, 5*inch])
+            story.append(table)
+            story.append(Spacer(1, 15))
+            images_in_row = []
     
-    # Container details table
-    story.append(Paragraph("Container Details", styles['Heading2']))
-    story.append(Spacer(1, 10))
-    
-    container_details = [['Container', 'Items', 'Weight (kg)', 'Volume Used (%)']]
-    
-    for i, c in enumerate(env.containers):
-        volume_util = (c['volume_used'] / (env.width * env.depth * env.height) * 100)
-        container_details.append([
-            f'Container {i+1}',
-            str(len(c['placed'])),
-            f"{c['weight']:.1f}",
-            f"{volume_util:.1f}%"
-        ])
-    
-    detail_table = Table(container_details, colWidths=[1.5*inch, 1*inch, 1.5*inch, 1.5*inch])
-    detail_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 10),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black)
-    ]))
-    
-    story.append(detail_table)
-    
-    # Build PDF
+    if images_in_row:
+        table = Table([images_in_row])
+        story.append(table)
+
     doc.build(story)
     buffer.seek(0)
-    
     return buffer
 
 # ==============================================================================
@@ -743,170 +615,56 @@ if st.button("🚀 Mulai Proses Pengepakan", type="primary", use_container_width
         st.warning("Mohon tambahkan setidaknya satu jenis barang di sidebar.")
     else:
         with st.spinner("Menghitung tata letak optimal... Ini mungkin butuh beberapa saat."):
-            # 1. Siapkan daftar item dari input pengguna
             all_items = [
                 Item(dx=ic['dx'], dy=ic['dy'], dz=ic['dz'], weight=ic['weight'], 
                      name=ic['name'], stackable=ic.get('stackable', True), 
-                     fragile=ic.get('fragile', False), max_stack_weight=ic.get('max_stack_weight', ic['weight']*10))
+                     fragile=ic.get('fragile', False), max_stack_weight=ic.get('max_stack_weight', 0))
                 for ic in st.session_state.items_to_pack for _ in range(ic['quantity'])
             ]
-
-            # 2. Filter item yang terlalu besar untuk kontainer
-            valid_items = []
-            oversized_items = []
-            for item in all_items:
-                if any(o[0] <= W and o[1] <= L and o[2] <= H for o in item.orientations):
-                    valid_items.append(item)
-                else:
-                    oversized_items.append(f"{item.name} ({item.dx}×{item.dy}×{item.dz} cm)")
-
-            # 3. Jalankan simulasi pengepakan
-            env = ContainerPackingEnv(container_size=(W, L, H), items=valid_items, max_weight_per_container=max_weight)
+            env = ContainerPackingEnv(container_size=(W, L, H), items=all_items, max_weight_per_container=max_weight)
             env = run_packing_simulation(env)
 
-        # 4. Tampilkan hasil
         st.success("🎉 Proses Pengepakan Selesai!")
-        
-        # Tampilkan Statistik
         st.subheader("📊 Ringkasan Hasil")
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Kontainer Digunakan", f"{len(env.containers)}")
         col2.metric("Barang Ditempatkan", f"{len(env.placed_items)}")
         col3.metric("Barang Tidak Muat", f"{len(env.unplaced)}")
         
-        # Calculate overall efficiency
         total_container_volume = len(env.containers) * W * L * H
         used_volume = sum(c['volume_used'] for c in env.containers)
         efficiency = (used_volume / total_container_volume * 100) if total_container_volume > 0 else 0
         col4.metric("Efisiensi Volume", f"{efficiency:.1f}%")
         
-        # Detail Utilisasi per Kontainer
-        st.subheader("📋 Detail per Kontainer")
-        container_data = []
-        for i, c in enumerate(env.containers):
-            volume_util = (c['volume_used'] / (W * L * H) * 100)
-            weight_util = (c['weight'] / max_weight * 100)
-            container_data.append({
-                "Kontainer": f"#{i+1}",
-                "Jumlah Item": len(c['placed']),
-                "Volume Utilitas": f"{volume_util:.1f}%",
-                "Berat": f"{c['weight']:.1f} kg ({weight_util:.1f}%)",
-                "Volume Terpakai": f"{c['volume_used']:,.0f} cm³"
-            })
-        
-        df = pd.DataFrame(container_data)
-        st.dataframe(df, use_container_width=True)
-        
-        # Visualisasi 3D Interaktif
         st.subheader("🌐 Visualisasi 3D Interaktif")
         if env.placed_items:
-            fig = create_plotly_visualization(env)
-            st.plotly_chart(fig, use_container_width=True)
+            base_fig = create_plotly_visualization(env)
+            st.plotly_chart(base_fig, use_container_width=True)
             
-            # Item legend
-            with st.expander("🏷️ Legend - Jenis Barang"):
-                unique_items = {}
-                for item in env.placed_items:
-                    key = (item.name, item.dx, item.dy, item.dz, item.stackable, item.fragile)
-                    if key not in unique_items:
-                        unique_items[key] = 0
-                    unique_items[key] += 1
-                
-                for (name, dx, dy, dz, stackable, fragile), count in unique_items.items():
-                    characteristics = []
-                    if fragile:
-                        characteristics.append("🔺 Fragile")
-                    if not stackable:
-                        characteristics.append("⚠️ Non-stackable")
-                    
-                    char_text = f" [{', '.join(characteristics)}]" if characteristics else ""
-                    st.write(f"📦 **{name}**: {count} item(s) - {dx}×{dy}×{dz} cm{char_text}")
+            st.subheader("📤 Ekspor Hasil")
+            
+            with st.spinner("🔄 Menyiapkan data PDF..."):
+                pdf_buffer = create_multiview_pdf(env, base_fig)
+                st.download_button(
+                    label="📄 Unduh Laporan PDF Multi-View",
+                    data=pdf_buffer,
+                    file_name="Laporan Packing Multi-View.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+
         else:
             st.info("Tidak ada barang yang berhasil ditempatkan untuk divisualisasikan.")
 
-        # Daftar Barang yang Tidak Muat
-        if env.unplaced or oversized_items:
+        if env.unplaced:
             with st.expander("⚠️ Detail barang yang tidak bisa dimasukkan", expanded=True):
-                if oversized_items:
-                    st.error("**Barang terlalu besar untuk kontainer:**")
-                    for info in set(oversized_items): 
-                        st.write(f"❌ {info}")
-                
-                if env.unplaced:
-                    st.warning("**Barang tidak muat karena kontainer penuh:**")
-                    unplaced_summary = {}
-                    for item in env.unplaced:
-                        key = (item.name, item.dx, item.dy, item.dz, item.stackable, item.fragile)
-                        unplaced_summary[key] = unplaced_summary.get(key, 0) + 1
-                    for (name, dx, dy, dz, stackable, fragile), count in unplaced_summary.items():
-                        characteristics = []
-                        if fragile:
-                            characteristics.append("🔺 Fragile")
-                        if not stackable:
-                            characteristics.append("⚠️ Non-stackable")
-                        
-                        char_text = f" [{', '.join(characteristics)}]" if characteristics else ""
-                        st.write(f"📦 {count}x {name} ({dx}×{dy}×{dz} cm){char_text}")
-
-        # Export results option dengan design yang menarik
-        st.subheader("📤 Export Hasil")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if st.button("📊 Export Hasil ke CSV", use_container_width=True, type="secondary"):
-                # Create detailed results
-                results_data = []
-                for container_idx, container in enumerate(env.containers):
-                    for placement in container['placed']:
-                        item = placement['item']
-                        results_data.append({
-                            'Kontainer': f'Container_{container_idx + 1}',
-                            'Nama_Barang': item.name,
-                            'Panjang_cm': item.dx,
-                            'Lebar_cm': item.dy, 
-                            'Tinggi_cm': item.dz,
-                            'Berat_kg': item.weight,
-                            'Volume_cm3': item.volume,
-                            'Posisi_X': placement['x'],
-                            'Posisi_Y': placement['y'],
-                            'Posisi_Z': placement['z'],
-                            'Stackable': 'Ya' if item.stackable else 'Tidak',
-                            'Fragile': 'Ya' if item.fragile else 'Tidak',
-                            'Max_Stack_Weight_kg': item.max_stack_weight
-                        })
-                
-                if results_data:
-                    df_export = pd.DataFrame(results_data)
-                    csv = df_export.to_csv(index=False)
-                    st.download_button(
-                        label="💾 Download CSV",
-                        data=csv,
-                        file_name="container_packing_results.csv",
-                        mime="text/csv",
-                        use_container_width=True
-                    )
-        
-        with col2:
-            if st.button("📄 Export 3D Multi-View PDF", use_container_width=True, type="secondary"):
-                with st.spinner("🔄 Membuat PDF multi-view... Mohon tunggu..."):
-                    try:
-                        pdf_buffer = create_multiview_pdf(env)
-                        pdf_bytes = pdf_buffer.getvalue()
-                        
-                        if not pdf_bytes or len(pdf_bytes) < 1000:
-                            st.error("❌ PDF gagal dibuat atau file terlalu kecil. Cek dependencies dan data.")
-                        else:
-                            st.download_button(
-                                label="📥 Download PDF Report",
-                                data=pdf_bytes,
-                                file_name="3d_container_packing_multiview.pdf",
-                                mime="application/pdf",
-                                use_container_width=True
-                            )
-                            st.success("✅ PDF multi-view berhasil dibuat!")
-                    except Exception as e:
-                        st.error(f"❌ Error membuat PDF: {str(e)}")
-                        st.info("💡 Pastikan package kaleido dan reportlab sudah terinstall")
+                st.warning("**Barang tidak muat karena kontainer penuh atau aturan penempatan:**")
+                unplaced_summary = {}
+                for item in env.unplaced:
+                    key = item.name
+                    unplaced_summary[key] = unplaced_summary.get(key, 0) + 1
+                for name, count in unplaced_summary.items():
+                    st.write(f"📦 {count}x {name}")
 else:
     st.info("👆 Atur konfigurasi di sidebar dan klik 'Mulai Proses Pengepakan' untuk melihat hasilnya.")
     
@@ -921,7 +679,6 @@ else:
         - **🆕 Stacking Rules**: Mendukung aturan penumpukan dengan batas beban maksimal
         - **🆕 Fragile Items**: Barang fragile tidak boleh ditindih dan ditempatkan di posisi aman
         - **🆕 Non-Stackable Items**: Barang yang tidak bisa dijadikan dasar tumpukan
-        - **Export Data**: Hasil dapat diekspor ke format CSV dengan detail karakteristik barang
         - **📄 Export PDF Multi-View**: Generate laporan PDF dengan 4 sudut pandang berbeda
         
         ### Cara Penggunaan:
